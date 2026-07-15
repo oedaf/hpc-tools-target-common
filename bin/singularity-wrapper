@@ -8,7 +8,7 @@
 # See LICENSE.txt file for full license text
 
 singularity_exec='/usr/bin/singularity'
-singularity_image_path="${TOOLS_TARGET}/common/image"
+singularity_image_path="${TOOLS_TARGET}/common/image/production"
 singularity_shell_startup="${TOOLS_TARGET}/common/shell_startup/source_singularity_startup.bash"
 
 declare singularity_image_list=()
@@ -81,32 +81,46 @@ case "$arg" in
 
 	# ------------------------------------------------------------
 	# --- validate image -----------------------------------------
-
+	# check for fully qualified path [useful for admins working in
+	# download or sandbox areas].  If not- check against list
+	# of expected production images.
+	
 	image_valid=false
-	for valid_image in "${singularity_image_list[@]}"; do
-	    if [[ "$valid_image" == "${singularity_image}" ]]; then
-		image_valid=true
-		break
+
+	if [[ -f "${singularity_image}" ]]; then
+	    singularity_image_pathfile="${singularity_image}"
+	    singularity_image="${singularity_image_pathfile##*/}"
+
+	    
+	else
+	    for valid_image in "${singularity_image_list[@]}"; do
+		if [[ "$valid_image" == "${singularity_image}" ]]; then
+		    image_valid=true
+		    break
 		
-	    fi
+		fi
 	    
-	done
+	    done
 	
-	if [[ "${image_valid}" == false ]]; then
-	    echo "❌ Error: Image [${singularity_image}] not found." >&2
-	    echo "Available images:" >&2
-	    if [[ ${#singularity_image_list[@]} -eq 0 ]]; then
-		echo "        No images found in [${singularity_image_path}]"
-	    
-	    else
-		for image_item in "${singularity_image_list[@]}"; do
-		    echo "        ${image_item}"
-		done
-	    
+	    if [[ "${image_valid}" == false ]]; then
+		echo "❌ Error: Image [${singularity_image}] not found." >&2
+		echo "Available images:" >&2
+		if [[ ${#singularity_image_list[@]} -eq 0 ]]; then
+		    echo "        No images found in [${singularity_image_path}]"
+		    
+		else
+		    for image_item in "${singularity_image_list[@]}"; do
+			echo "        ${image_item}"
+		    done
+		    
+		fi
+
+		exit 1
+	
 	    fi
 
-	    exit 1
-	
+	    singularity_image_pathfile="${singularity_image_path}/${singularity_image}"
+	    
 	fi
 	;;
     
@@ -192,7 +206,6 @@ echo "exec_cmd:  [${exec_cmd}]"
 
 
 
-singularity_image_pathfile="${singularity_image_path}/${singularity_image}"
 singularity_hostname=$(echo "${HOSTNAME}-${singularity_image}-${USER}" | tr 'A-Z' 'a-z' | tr '_' '-' )
 singularity_temp=/tmp/$USER/$singularity_image
 
@@ -256,6 +269,7 @@ $singularity_exec \
     exec          \
     --containall  \
     --cleanenv    \
+    --env USER=$USER    \
     $container_writable \
     $bind_home          \
     $bind_data          \
