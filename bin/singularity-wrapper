@@ -1,0 +1,272 @@
+#!/bin/bash
+
+# file: singularity-wrapper
+#
+# MIT License
+# Copyright (c) 2026 Open EDA Framework
+# SPDX-License-Identifier: MIT
+# See LICENSE.txt file for full license text
+
+singularity_exec='/usr/bin/singularity'
+singularity_image_path="${TOOLS_TARGET}/common/image"
+singularity_shell_startup="${TOOLS_TARGET}/common/shell_startup/source_singularity_startup.bash"
+
+declare singularity_image_list=()
+shopt -s nullglob
+for img in "${singularity_image_path}"/*; do
+    [[ -e "$img" ]] && singularity_image_list+=("$(basename "$img")")
+done
+shopt -u nullglob
+
+# singularity_image_list=$(ls -1 "${singulrity_image_path}")
+
+usage () {
+    {
+	echo "--------------------------------------------------------------------------------"
+	echo "singularity-wrapper"
+	echo ""
+	echo "Usage:"
+	echo "    singularity-wrapper <image> [--gui] < shell | exec >"
+	echo ""
+	echo "    shell [--admin|--root]"
+	echo "    The shell option launches and interactive shell with the singularity"
+	echo "    image.  By default, this is expected to be a common user.  There are"
+	echo "    two additional modes [--admin|--root]."
+	echo ""
+	echo "    shell --admin"
+	echo "    This will mount TOOLS_ADMIN and is used by the admin account for"
+	echo "    building up the tool tree for a given image/distro."
+	echo ""
+	echo "    shell --root"
+	echo "    This mode is expected to be run as ROOT user.  In this mode NO mounts"
+	echo "    are provided.  This is ONLY for admins modifying the singularity image."
+	echo ""
+	echo "    available images:"
+	
+	if [[ ${#singularity_image_list[@]} -eq 0 ]]; then
+	    echo "        No images found in [${singularity_image_path}]"
+	    
+	else
+	    for image_item in "${singularity_image_list[@]}"; do
+		echo "        ${image_item}"
+	    done
+	    
+	fi
+	echo ""
+	echo "--------------------------------------------------------------------------------"
+    } >&2
+    
+}
+
+
+# ------------------------------------------------------------
+# --- get <image> or [--help] --------------------------------
+arg=$1
+case "$arg" in
+    '-h'|'-help'|'--help'|'--usage')
+	usage
+	exit
+	;;
+
+
+    '')
+	echo "❌ Error: No Image specified." >&2
+	usage
+	exit 1
+	;;
+    
+    
+    *)
+	singularity_image="$arg"
+
+	# ------------------------------------------------------------
+	# --- validate image -----------------------------------------
+
+	image_valid=false
+	for valid_image in "${singularity_image_list[@]}"; do
+	    if [[ "$valid_image" == "${singularity_image}" ]]; then
+		image_valid=true
+		break
+		
+	    fi
+	    
+	done
+	
+	if [[ "${image_valid}" == false ]]; then
+	    echo "❌ Error: Image [${singularity_image}] not found." >&2
+	    echo "Available images:" >&2
+	    if [[ ${#singularity_image_list[@]} -eq 0 ]]; then
+		echo "        No images found in [${singularity_image_path}]"
+	    
+	    else
+		for image_item in "${singularity_image_list[@]}"; do
+		    echo "        ${image_item}"
+		done
+	    
+	    fi
+
+	    exit 1
+	
+	fi
+	;;
+    
+esac
+
+shift
+arg=$1
+
+# ------------------------------------------------------------
+# --- check for [--gui] --------------------------------------
+gui_mode=false
+if [[ "$arg" == '--gui' ]]; then
+    gui_mode=true
+    shift
+    arg=$1
+fi
+
+
+shift
+
+case "$arg" in
+    'shell')
+	exec_cmd='/bin/bash --login --noprofile'
+	user_mode='user'
+
+	if [[ "$1" == '--admin' ]]; then
+	    user_mode='admin'
+
+	elif [[ "$1" == '--root' ]]; then
+	    user_mode='root'
+
+	fi
+	    
+	;;
+
+    'exec')
+	user_mode='user'
+	exec_cmd=''
+
+	if [[ ! -z "$1" ]]; then
+	    exec_cmd="$1"
+	    shift
+
+	    while [[ $1 ]]; do
+		exec_cmd="${exec_cmd} $1"
+		shift
+
+	    done
+
+	fi
+
+	if [[ -z "$exec_cmd" ]]; then
+	    echo "❌ no commands given for 'exec' mode"
+	    exit 1
+	fi
+	;;
+
+    '')
+	echo "must specify <shell|exec> after <image>" >&2
+	#usage
+	exit 1
+	;;
+	
+    '-h'|'-help'|'--help'|'--usage')
+	usage
+	exit 0
+	;;
+    
+    *)
+	echo "unknown option [$arg]"
+	usage
+	exit 1
+	;;
+    
+esac
+
+
+
+echo "image:     [${singularity_image}]"
+echo "gui_mode:  [${gui_mode}]"
+echo "user_mode: [${user_mode}]"
+echo "exec_cmd:  [${exec_cmd}]"
+
+
+
+singularity_image_pathfile="${singularity_image_path}/${singularity_image}"
+singularity_hostname=$(echo "${HOSTNAME}-${singularity_image}-${USER}" | tr 'A-Z' 'a-z' | tr '_' '-' )
+singularity_temp=/tmp/$USER/$singularity_image
+
+# ------------------------------------------------------------
+# mount points + writable - as switches to singularity command
+case $user_mode in
+    'user')
+	container_writable=""
+	bind_home="--bind  /home:/home:rw"
+	bind_data="--bind  /data:/data:rw"
+	bind_tools="--bind /tools:/tools:ro"
+	bind_tools_admin=""
+	;;
+
+    'admin')
+	container_writable=""
+	bind_home="--bind /home:/home:ro"
+	bind_data="--bind  /data:/data:rw"
+	bind_tools="--bind /tools:/tools:rw"
+	bind_tools_admin="--bind /data/tools_admin:/tools_admin:rw"
+	;;
+
+    'root')
+	container_writable="--writable"
+	bind_home=""
+	bind_data=""
+	bind_tools="--bind /tools:/tools:ro"
+	bind_tools_admin=""
+	;;
+
+    *)
+	echo "❌ Error: unknown user_mode [$user_mode]."
+	echo "Exiting..."
+	exit 1
+	;;
+	
+esac
+
+
+gui=''
+if [[ ${gui_mode} == true ]]; then
+    #gui_0='--x11'
+    #gui_1=''
+    #gui_2=''
+    
+    # --- alternate:------------------
+    gui_0='--bind /tmp/.X11-unix'
+    gui_1='--bind /dev/dri'
+    gui_2="--env DISPLAY=$DISPLAY"
+    
+fi
+
+
+if [[ ! -d "${singularity_temp}" ]]; then
+    mkdir -p "${singularity_temp}"
+    
+fi
+
+
+$singularity_exec \
+    exec          \
+    --containall  \
+    --cleanenv    \
+    $container_writable \
+    $bind_home          \
+    $bind_data          \
+    $bind_tools         \
+    $bind_tools_admin   \
+    $gui_0              \
+    $gui_1              \
+    $gui_2              \
+    --dns 8.8.8.8,8.8.4.4 \
+    --workdir  $singularity_temp \
+    --hostname $singularity_hostname \
+    $singularity_image_pathfile      \
+    /bin/bash -c "source ${singularity_shell_startup}; exec $exec_cmd"
+
