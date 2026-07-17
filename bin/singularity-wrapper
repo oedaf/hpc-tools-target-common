@@ -87,7 +87,7 @@ case "$arg" in
 	
 	image_valid=false
 
-	if [[ -f "${singularity_image}" ]]; then
+	if [[ -f "${singularity_image}" ]] || [[ -d "${singularity_image}" ]]; then
 	    singularity_image_pathfile="${singularity_image}"
 	    singularity_image="${singularity_image_pathfile##*/}"
 
